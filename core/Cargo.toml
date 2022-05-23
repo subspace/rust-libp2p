@@ -64,6 +64,7 @@ default = [ "secp256k1", "ecdsa" ]
 secp256k1 = [ "libsecp256k1" ]
 ecdsa = [ "p256" ]
 serde = ["multihash/serde-codec", "_serde"]
+sr25519 = [ "schnorrkel" ]
 
 [[bench]]
 name = "peer_id"
