@@ -58,6 +58,16 @@ impl<T> Key<T> {
         Key { preimage, bytes }
     }
 
+    /// Constructs a new `Key` from the preconstructed KeyBytes object.
+    ///
+    /// The preimage is equal to the bytes field.
+    pub fn from_key_bytes(preimage: KeyBytes) -> Key<KeyBytes> {
+        Key {
+            bytes: preimage.clone(),
+            preimage,
+        }
+    }
+
     /// Borrows the preimage of the key.
     pub fn preimage(&self) -> &T {
         &self.preimage
@@ -152,6 +162,12 @@ impl KeyBytes {
         KeyBytes(Sha256::digest(value.borrow()))
     }
 
+    /// Creates a new key in the DHT keyspace from the 32-bytes array.
+    /// It doesn't hash the provided value and uses it as it is.
+    pub fn from_raw_array(value: GenericArray<u8, U32>) -> Self {
+        KeyBytes(value)
+    }
+
     /// Computes the distance of the keys according to the XOR metric.
     pub fn distance<U>(&self, other: &U) -> Distance
     where
@@ -212,6 +228,13 @@ mod tests {
         }
     }
 
+    impl Arbitrary for Key<KeyBytes> {
+        fn arbitrary<G: Gen>(_: &mut G) -> Key<KeyBytes> {
+            let keybytes = KeyBytes::from_raw_array(rand::thread_rng().gen::<[u8; 32]>().into());
+            Key::<KeyBytes>::from_key_bytes(keybytes.clone())
+        }
+    }
+
     #[test]
     fn identity() {
         fn prop(a: Key<PeerId>) -> bool {
@@ -253,5 +276,14 @@ mod tests {
             })
         }
         quickcheck(prop as fn(_, _) -> _)
+    }
+
+    #[test]
+    fn nonhashing_kad_key() {
+        fn prop(key: Key<KeyBytes>) -> bool {
+            let keybytes: KeyBytes = key.clone().into();
+            *key.preimage() == keybytes
+        }
+        quickcheck(prop as fn(_) -> _)
     }
 }
