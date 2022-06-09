@@ -65,6 +65,7 @@ yamux = ["libp2p-yamux"]
 secp256k1 = ["libp2p-core/secp256k1"]
 serde = ["libp2p-core/serde", "libp2p-kad/serde", "libp2p-gossipsub/serde"]
 sr25519 = ["libp2p-core/sr25519"]
+identity-hashing-for-peer-id = ["libp2p-kad/identity-hashing-for-peer-id"]
 
 [package.metadata.docs.rs]
 all-features = true

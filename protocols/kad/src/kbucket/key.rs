@@ -55,8 +55,11 @@ impl<T> Key<T> {
         T: Borrow<[u8]>,
     {
         if cfg!(feature = "identity-hashing-for-peer-id") {
-            if let Ok(m) = Multihash::from_bytes(preimage.borrow()){
-                return Key { preimage, bytes: m.into() }
+            if let Ok(m) = Multihash::from_bytes(preimage.borrow()) {
+                return Key {
+                    preimage,
+                    bytes: m.into(),
+                };
             }
         }
 
@@ -100,14 +103,20 @@ impl<T> Into<KeyBytes> for Key<T> {
 
 impl From<Multihash> for Key<Multihash> {
     fn from(m: Multihash) -> Self {
-        Key { preimage: m, bytes: m.into() }
+        Key {
+            preimage: m,
+            bytes: m.into(),
+        }
     }
 }
 
 impl From<PeerId> for Key<PeerId> {
     fn from(p: PeerId) -> Self {
         let m: Multihash = p.into();
-        Key { preimage: p, bytes: m.into() }
+        Key {
+            preimage: p,
+            bytes: m.into(),
+        }
     }
 }
 
