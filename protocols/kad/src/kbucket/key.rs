@@ -54,18 +54,14 @@ impl<T> Key<T> {
     where
         T: Borrow<[u8]>,
     {
+        if cfg!(feature = "identity-hashing-for-peer-id") {
+            if let Ok(m) = Multihash::from_bytes(preimage.borrow()){
+                return Key { preimage, bytes: m.into() }
+            }
+        }
+
         let bytes = KeyBytes::new(preimage.borrow());
         Key { preimage, bytes }
-    }
-
-    /// Constructs a new `Key` from the preconstructed KeyBytes object.
-    ///
-    /// The preimage is equal to the bytes field.
-    pub fn from_key_bytes(preimage: KeyBytes) -> Key<KeyBytes> {
-        Key {
-            bytes: preimage.clone(),
-            preimage,
-        }
     }
 
     /// Borrows the preimage of the key.
@@ -104,15 +100,14 @@ impl<T> Into<KeyBytes> for Key<T> {
 
 impl From<Multihash> for Key<Multihash> {
     fn from(m: Multihash) -> Self {
-        let bytes = KeyBytes(Sha256::digest(&m.to_bytes()));
-        Key { preimage: m, bytes }
+        Key { preimage: m, bytes: m.into() }
     }
 }
 
 impl From<PeerId> for Key<PeerId> {
     fn from(p: PeerId) -> Self {
-        let bytes = KeyBytes(Sha256::digest(&p.to_bytes()));
-        Key { preimage: p, bytes }
+        let m: Multihash = p.into();
+        Key { preimage: p, bytes: m.into() }
     }
 }
 
@@ -162,12 +157,6 @@ impl KeyBytes {
         KeyBytes(Sha256::digest(value.borrow()))
     }
 
-    /// Creates a new key in the DHT keyspace from the 32-bytes array.
-    /// It doesn't hash the provided value and uses it as it is.
-    pub fn from_raw_array(value: GenericArray<u8, U32>) -> Self {
-        KeyBytes(value)
-    }
-
     /// Computes the distance of the keys according to the XOR metric.
     pub fn distance<U>(&self, other: &U) -> Distance
     where
@@ -187,11 +176,35 @@ impl KeyBytes {
         let key_int = U256::from(self.0.as_slice()) ^ d.0;
         KeyBytes(GenericArray::from(<[u8; 32]>::from(key_int)))
     }
+
+    // Creates a new key in the DHT keyspace from the 32-bytes array.
+    // It doesn't hash the provided value and uses it as it is.
+    fn from_generic_array(value: GenericArray<u8, U32>) -> Self {
+        KeyBytes(value)
+    }
 }
 
 impl AsRef<KeyBytes> for KeyBytes {
     fn as_ref(&self) -> &KeyBytes {
         self
+    }
+}
+
+impl From<Multihash> for KeyBytes {
+    fn from(m: Multihash) -> Self {
+        if cfg!(feature = "identity-hashing-for-peer-id") {
+            const SHA256_HASH_SIZE: usize = 32;
+
+            // Identity hasher for 32-bytes digest
+            if m.code() == libp2p_core::multihash::Code::Identity.into()
+                && m.digest().len() == SHA256_HASH_SIZE
+            {
+                let array = GenericArray::from_slice(m.digest());
+                return KeyBytes::from_generic_array(*array);
+            }
+        }
+
+        KeyBytes(Sha256::digest(&m.to_bytes()))
     }
 }
 
@@ -225,13 +238,6 @@ mod tests {
         fn arbitrary<G: Gen>(_: &mut G) -> Key<Multihash> {
             let hash = rand::thread_rng().gen::<[u8; 32]>();
             Key::from(Multihash::wrap(Code::Sha2_256.into(), &hash).unwrap())
-        }
-    }
-
-    impl Arbitrary for Key<KeyBytes> {
-        fn arbitrary<G: Gen>(_: &mut G) -> Key<KeyBytes> {
-            let keybytes = KeyBytes::from_raw_array(rand::thread_rng().gen::<[u8; 32]>().into());
-            Key::<KeyBytes>::from_key_bytes(keybytes.clone())
         }
     }
 
@@ -279,10 +285,19 @@ mod tests {
     }
 
     #[test]
-    fn nonhashing_kad_key() {
-        fn prop(key: Key<KeyBytes>) -> bool {
+    fn nonhashing_kad_key_from_peer_id() {
+        fn prop(key: Key<PeerId>) -> bool {
+            // internal key bytes from the key
             let keybytes: KeyBytes = key.clone().into();
-            *key.preimage() == keybytes
+
+            if cfg!(feature = "identity-hashing-for-peer-id") {
+                // identity multihash from peer_id preimage
+                let multihash: Multihash = key.preimage.into();
+                let array = GenericArray::from_slice(multihash.digest());
+                KeyBytes::from_generic_array(*array) == keybytes
+            } else {
+                KeyBytes::new(key.preimage().to_bytes()) == keybytes
+            }
         }
         quickcheck(prop as fn(_) -> _)
     }

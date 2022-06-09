@@ -44,3 +44,4 @@ prost-build = "0.9"
 
 [features]
 serde = ["_serde", "bytes/serde"]
+identity-hashing-for-peer-id = []
