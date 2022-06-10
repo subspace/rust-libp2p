@@ -55,6 +55,15 @@ impl fmt::Display for PeerId {
 impl PeerId {
     /// Builds a `PeerId` from a public key.
     pub fn from_public_key(key: &PublicKey) -> PeerId {
+        if cfg!(feature = "identity-hashing-for-peer-id") {
+            #[cfg(feature = "sr25519")]
+            if let crate::identity::PublicKey::Sr25519(pk) = key {
+                let multihash = multihash::Code::Identity.digest(&pk.encode());
+
+                return PeerId { multihash };
+            }
+        }
+
         let key_enc = key.to_protobuf_encoding();
 
         let hash_algorithm = if key_enc.len() <= MAX_INLINE_KEY_LENGTH {
