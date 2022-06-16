@@ -26,9 +26,7 @@
 use async_std::task;
 use futures::StreamExt;
 use libp2p::kad::record::store::MemoryStore;
-use libp2p::kad::{
-    kbucket, GetClosestPeersError, Kademlia, KademliaConfig, KademliaEvent, QueryResult,
-};
+use libp2p::kad::{GetClosestPeersError, Kademlia, KademliaConfig, KademliaEvent, QueryResult};
 use libp2p::{
     development_transport, identity,
     swarm::{Swarm, SwarmEvent},
