@@ -28,7 +28,7 @@ use crate::handler::{
     KademliaRequestId,
 };
 use crate::jobs::*;
-use crate::kbucket::{self, Distance, KBucketsTable, NodeStatus};
+use crate::kbucket::{self, Distance, KBucketsTable, NodeStatus, PreimageIntoKeyBytes, Sha256Hash};
 use crate::protocol::{KadConnectionType, KadPeer, KademliaProtocolConfig};
 use crate::query::{Query, QueryConfig, QueryId, QueryPool, QueryPoolState};
 use crate::record::{
@@ -60,9 +60,9 @@ pub use crate::query::QueryStats;
 
 /// `Kademlia` is a `NetworkBehaviour` that implements the libp2p
 /// Kademlia protocol.
-pub struct Kademlia<TStore> {
+pub struct Kademlia<TStore, C = Sha256Hash> {
     /// The Kademlia routing table.
-    kbuckets: KBucketsTable<kbucket::Key<PeerId>, Addresses>,
+    kbuckets: KBucketsTable<kbucket::Key<PeerId, C>, Addresses, C>,
 
     /// The k-bucket insertion strategy.
     kbucket_inserts: KademliaBucketInserts,
@@ -74,7 +74,7 @@ pub struct Kademlia<TStore> {
     record_filtering: KademliaStoreInserts,
 
     /// The currently active (i.e. in-progress) queries.
-    queries: QueryPool<QueryInner>,
+    queries: QueryPool<QueryInner<C>, C>,
 
     /// The currently connected peers.
     ///
@@ -103,11 +103,6 @@ pub struct Kademlia<TStore> {
 
     /// The currently known addresses of the local node.
     local_addrs: HashSet<Multiaddr>,
-
-    /// Function that converts [`PeerId`] to [`kbucket::Key`].
-    ///
-    /// In the simplest case just [`kbucket::Key::from`].
-    peer_id_to_key: fn(PeerId) -> kbucket::Key<PeerId>,
 
     /// See [`KademliaConfig::caching`].
     caching: KademliaCaching,
@@ -179,7 +174,6 @@ pub struct KademliaConfig {
     provider_publication_interval: Option<Duration>,
     connection_idle_timeout: Duration,
     kbucket_inserts: KademliaBucketInserts,
-    peer_id_to_key: fn(PeerId) -> kbucket::Key<PeerId>,
     caching: KademliaCaching,
 }
 
@@ -214,7 +208,6 @@ impl Default for KademliaConfig {
             provider_record_ttl: Some(Duration::from_secs(24 * 60 * 60)),
             connection_idle_timeout: Duration::from_secs(10),
             kbucket_inserts: KademliaBucketInserts::OnConnected,
-            peer_id_to_key: kbucket::Key::from,
             caching: KademliaCaching::Enabled { max_peers: 1 },
         }
     }
@@ -387,13 +380,6 @@ impl KademliaConfig {
         self
     }
 
-    /// Sets the function that converts [`PeerId`] to [`kbucket::Key`].
-    ///
-    /// In the simplest case just [`kbucket::Key::from`].
-    pub fn set_peer_id_to_key(&mut self, peer_id_to_key: fn(PeerId) -> kbucket::Key<PeerId>) {
-        self.peer_id_to_key = peer_id_to_key;
-    }
-
     /// Sets the [`KademliaCaching`] strategy to use for successful lookups.
     ///
     /// The default is [`KademliaCaching::Enabled`] with a `max_peers` of 1.
@@ -406,10 +392,13 @@ impl KademliaConfig {
     }
 }
 
-impl<TStore> Kademlia<TStore>
+impl<TStore, C> Kademlia<TStore, C>
 where
     for<'a> TStore: RecordStore<'a>,
     TStore: Send + 'static,
+    C: PreimageIntoKeyBytes<PeerId>
+        + PreimageIntoKeyBytes<record::Key>
+        + PreimageIntoKeyBytes<Vec<u8>>,
 {
     /// Creates a new `Kademlia` network behaviour with a default configuration.
     pub fn new(id: PeerId, store: TStore) -> Self {
@@ -423,7 +412,7 @@ where
 
     /// Creates a new `Kademlia` network behaviour with the given configuration.
     pub fn with_config(id: PeerId, store: TStore, config: KademliaConfig) -> Self {
-        let local_key = (config.peer_id_to_key)(id);
+        let local_key = kbucket::Key::new(id);
 
         let put_record_job = config
             .record_replication_interval
@@ -456,13 +445,12 @@ where
             provider_record_ttl: config.provider_record_ttl,
             connection_idle_timeout: config.connection_idle_timeout,
             local_addrs: HashSet::new(),
-            peer_id_to_key: config.peer_id_to_key,
             caching: config.caching,
         }
     }
 
     /// Gets an iterator over immutable references to all running queries.
-    pub fn iter_queries(&self) -> impl Iterator<Item = QueryRef<'_>> {
+    pub fn iter_queries(&self) -> impl Iterator<Item = QueryRef<'_, C>> {
         self.queries.iter().filter_map(|query| {
             if !query.is_finished() {
                 Some(QueryRef { query })
@@ -473,7 +461,7 @@ where
     }
 
     /// Gets an iterator over mutable references to all running queries.
-    pub fn iter_queries_mut(&mut self) -> impl Iterator<Item = QueryMut<'_>> {
+    pub fn iter_queries_mut(&mut self) -> impl Iterator<Item = QueryMut<'_, C>> {
         self.queries.iter_mut().filter_map(|query| {
             if !query.is_finished() {
                 Some(QueryMut { query })
@@ -484,7 +472,7 @@ where
     }
 
     /// Gets an immutable reference to a running query, if it exists.
-    pub fn query(&self, id: &QueryId) -> Option<QueryRef<'_>> {
+    pub fn query(&self, id: &QueryId) -> Option<QueryRef<'_, C>> {
         self.queries.get(id).and_then(|query| {
             if !query.is_finished() {
                 Some(QueryRef { query })
@@ -495,7 +483,7 @@ where
     }
 
     /// Gets a mutable reference to a running query, if it exists.
-    pub fn query_mut<'a>(&'a mut self, id: &QueryId) -> Option<QueryMut<'a>> {
+    pub fn query_mut<'a>(&'a mut self, id: &QueryId) -> Option<QueryMut<'a, C>> {
         self.queries.get_mut(id).and_then(|query| {
             if !query.is_finished() {
                 Some(QueryMut { query })
@@ -523,7 +511,7 @@ where
     /// If the routing table has been updated as a result of this operation,
     /// a [`KademliaEvent::RoutingUpdated`] event is emitted.
     pub fn add_address(&mut self, peer: &PeerId, address: Multiaddr) -> RoutingUpdate {
-        let key = (self.peer_id_to_key)(*peer);
+        let key = kbucket::Key::new(*peer);
         match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(mut entry, _) => {
                 if entry.value().insert(address) {
@@ -607,8 +595,8 @@ where
         &mut self,
         peer: &PeerId,
         address: &Multiaddr,
-    ) -> Option<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> {
-        let key = (self.peer_id_to_key)(*peer);
+    ) -> Option<kbucket::EntryView<kbucket::Key<PeerId, C>, Addresses>> {
+        let key = kbucket::Key::new(*peer);
         match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(mut entry, _) => {
                 if entry.value().remove(address).is_err() {
@@ -635,8 +623,8 @@ where
     pub fn remove_peer(
         &mut self,
         peer: &PeerId,
-    ) -> Option<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> {
-        let key = (self.peer_id_to_key)(*peer);
+    ) -> Option<kbucket::EntryView<kbucket::Key<PeerId, C>, Addresses>> {
+        let key = kbucket::Key::new(*peer);
         match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(entry, _) => Some(entry.remove()),
             kbucket::Entry::Pending(entry, _) => Some(entry.remove()),
@@ -647,7 +635,7 @@ where
     /// Returns an iterator over all non-empty buckets in the routing table.
     pub fn kbuckets(
         &mut self,
-    ) -> impl Iterator<Item = kbucket::KBucketRef<'_, kbucket::Key<PeerId>, Addresses>> {
+    ) -> impl Iterator<Item = kbucket::KBucketRef<'_, kbucket::Key<PeerId, C>, Addresses, C>> {
         self.kbuckets.iter().filter(|b| !b.is_empty())
     }
 
@@ -657,11 +645,12 @@ where
     pub fn kbucket<K>(
         &mut self,
         key: K,
-    ) -> Option<kbucket::KBucketRef<'_, kbucket::Key<PeerId>, Addresses>>
+    ) -> Option<kbucket::KBucketRef<'_, kbucket::Key<PeerId, C>, Addresses, C>>
     where
-        K: Into<kbucket::Key<K>> + Clone,
+        K: Clone,
+        C: PreimageIntoKeyBytes<K>,
     {
-        self.kbuckets.bucket(&key.into())
+        self.kbuckets.bucket(&kbucket::Key::new(key))
     }
 
     /// Initiates an iterative query for the closest peers to the given key.
@@ -670,12 +659,13 @@ where
     /// [`KademliaEvent::OutboundQueryCompleted{QueryResult::GetClosestPeers}`].
     pub fn get_closest_peers<K>(&mut self, key: K) -> QueryId
     where
-        K: Into<kbucket::Key<K>> + Into<Vec<u8>> + Clone,
+        K: Into<Vec<u8>> + Clone,
+        C: PreimageIntoKeyBytes<K>,
     {
         let info = QueryInfo::GetClosestPeers {
             key: key.clone().into(),
         };
-        let target: kbucket::Key<K> = key.into();
+        let target = kbucket::Key::new(key);
         let peers = self.kbuckets.closest_keys(&target);
         let inner = QueryInner::new(info);
         self.queries.add_iter_closest(target.clone(), peers, inner)
@@ -684,8 +674,8 @@ where
     /// Returns closest peers to the given key; takes peers from local routing table only.
     pub fn get_closest_local_peers<'a, K: Clone>(
         &'a mut self,
-        key: &'a kbucket::Key<K>,
-    ) -> impl Iterator<Item = kbucket::Key<PeerId>> + 'a {
+        key: &'a kbucket::Key<K, C>,
+    ) -> impl Iterator<Item = kbucket::Key<PeerId, C>> + 'a {
         self.kbuckets.closest_keys(key)
     }
 
@@ -980,7 +970,7 @@ where
     /// result.
     fn find_closest<T: Clone>(
         &mut self,
-        target: &kbucket::Key<T>,
+        target: &kbucket::Key<T, C>,
         source: &PeerId,
     ) -> Vec<KadPeer> {
         if target == self.kbuckets.local_key() {
@@ -1000,7 +990,6 @@ where
         let kbuckets = &mut self.kbuckets;
         let connected = &mut self.connected_peers;
         let local_addrs = &self.local_addrs;
-        let peer_id_to_key = self.peer_id_to_key;
         self.store
             .providers(key)
             .into_iter()
@@ -1023,7 +1012,7 @@ where
                         if &node_id == kbuckets.local_key().preimage() {
                             Some(local_addrs.iter().cloned().collect::<Vec<_>>())
                         } else {
-                            let key = peer_id_to_key(node_id);
+                            let key = kbucket::Key::new(node_id);
                             kbuckets
                                 .entry(&key)
                                 .view()
@@ -1080,7 +1069,7 @@ where
         address: Option<Multiaddr>,
         new_status: NodeStatus,
     ) {
-        let key = (self.peer_id_to_key)(peer);
+        let key = kbucket::Key::new(peer);
         match self.kbuckets.entry(&key) {
             kbucket::Entry::Present(mut entry, old_status) => {
                 if old_status != new_status {
@@ -1195,12 +1184,12 @@ where
     /// Handles a finished (i.e. successful) query.
     fn query_finished(
         &mut self,
-        q: Query<QueryInner>,
+        q: Query<QueryInner<C>, C>,
         params: &mut impl PollParameters,
     ) -> Option<KademliaEvent> {
         let query_id = q.id();
         log::trace!("Query {:?} finished.", query_id);
-        let result = q.into_result(self.peer_id_to_key);
+        let result = q.into_result();
         match result.inner.info {
             QueryInfo::Bootstrap { peer, remaining } => {
                 let local_key = self.kbuckets.local_key().clone();
@@ -1228,13 +1217,13 @@ where
                             // Pr(bucket-253) = 1 - (7/8)^16   ~= 0.88
                             // Pr(bucket-252) = 1 - (15/16)^16 ~= 0.64
                             // ...
-                            let mut target = (self.peer_id_to_key)(PeerId::random());
+                            let mut target = kbucket::Key::new(PeerId::random());
                             for _ in 0..16 {
                                 let d = local_key.distance(&target);
                                 if b.contains(&d) {
                                     break;
                                 }
-                                target = (self.peer_id_to_key)(PeerId::random());
+                                target = kbucket::Key::new(PeerId::random());
                             }
                             target
                         })
@@ -1445,10 +1434,10 @@ where
     }
 
     /// Handles a query that timed out.
-    fn query_timeout(&mut self, query: Query<QueryInner>) -> Option<KademliaEvent> {
+    fn query_timeout(&mut self, query: Query<QueryInner<C>, C>) -> Option<KademliaEvent> {
         let query_id = query.id();
         log::trace!("Query {:?} timed out.", query_id);
-        let result = query.into_result(self.peer_id_to_key);
+        let result = query.into_result();
         match result.inner.info {
             QueryInfo::Bootstrap {
                 peer,
@@ -1750,7 +1739,7 @@ where
     }
 
     fn address_failed(&mut self, peer_id: PeerId, address: &Multiaddr) {
-        let key = (self.peer_id_to_key)(peer_id);
+        let key = kbucket::Key::new(peer_id);
 
         if let Some(addrs) = self.kbuckets.entry(&key).value() {
             // TODO: Ideally, the address should only be removed if the error can
@@ -1793,10 +1782,13 @@ fn exp_decrease(ttl: Duration, exp: u32) -> Duration {
     Duration::from_secs(ttl.as_secs().checked_shr(exp).unwrap_or(0))
 }
 
-impl<TStore> NetworkBehaviour for Kademlia<TStore>
+impl<TStore, C> NetworkBehaviour for Kademlia<TStore, C>
 where
     for<'a> TStore: RecordStore<'a>,
     TStore: Send + 'static,
+    C: PreimageIntoKeyBytes<PeerId>
+        + PreimageIntoKeyBytes<record::Key>
+        + PreimageIntoKeyBytes<Vec<u8>>,
 {
     type ConnectionHandler = KademliaHandlerProto<QueryId>;
     type OutEvent = KademliaEvent;
@@ -1812,7 +1804,7 @@ where
     fn addresses_of_peer(&mut self, peer_id: &PeerId) -> Vec<Multiaddr> {
         // We should order addresses from decreasing likelyhood of connectivity, so start with
         // the addresses of that peer in the k-buckets.
-        let key = (self.peer_id_to_key)(*peer_id);
+        let key = kbucket::Key::new(*peer_id);
         let mut peer_addrs =
             if let kbucket::Entry::Present(mut entry, _) = self.kbuckets.entry(&key) {
                 let addrs = entry.value().iter().cloned().collect::<Vec<_>>();
@@ -1882,7 +1874,7 @@ where
         let (old, new) = (old.get_remote_address(), new.get_remote_address());
 
         // Update routing table.
-        if let Some(addrs) = self.kbuckets.entry(&(self.peer_id_to_key)(*peer)).value() {
+        if let Some(addrs) = self.kbuckets.entry(&kbucket::Key::new(*peer)).value() {
             if addrs.replace(old, new) {
                 debug!(
                     "Address '{}' replaced with '{}' for peer '{}'.",
@@ -2185,8 +2177,8 @@ where
                         } else {
                             log::trace!("Record with key {:?} not found at {}", key, source);
                             if let KademliaCaching::Enabled { max_peers } = self.caching {
-                                let source_key = (self.peer_id_to_key)(source);
-                                let target_key = kbucket::Key::from(key.clone());
+                                let source_key = kbucket::Key::<PeerId, C>::new(source);
+                                let target_key = kbucket::Key::new(key.clone());
                                 let distance = source_key.distance(&target_key);
                                 cache_candidates.insert(distance, source);
                                 if cache_candidates.len() > max_peers as usize {
@@ -2784,8 +2776,8 @@ impl AddProviderError {
     }
 }
 
-impl From<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> for KadPeer {
-    fn from(e: kbucket::EntryView<kbucket::Key<PeerId>, Addresses>) -> KadPeer {
+impl<C> From<kbucket::EntryView<kbucket::Key<PeerId, C>, Addresses>> for KadPeer {
+    fn from(e: kbucket::EntryView<kbucket::Key<PeerId, C>, Addresses>) -> KadPeer {
         KadPeer {
             node_id: e.node.key.into_preimage(),
             multiaddrs: e.node.value.into_vec(),
@@ -2800,9 +2792,9 @@ impl From<kbucket::EntryView<kbucket::Key<PeerId>, Addresses>> for KadPeer {
 //////////////////////////////////////////////////////////////////////////////
 // Internal query state
 
-struct QueryInner {
+struct QueryInner<C> {
     /// The query-specific state.
-    info: QueryInfo,
+    info: QueryInfo<C>,
     /// Addresses of peers discovered during a query.
     addresses: FnvHashMap<PeerId, SmallVec<[Multiaddr; 8]>>,
     /// A map of pending requests to peers.
@@ -2812,8 +2804,8 @@ struct QueryInner {
     pending_rpcs: SmallVec<[(PeerId, KademliaHandlerIn<QueryId>); K_VALUE.get()]>,
 }
 
-impl QueryInner {
-    fn new(info: QueryInfo) -> Self {
+impl<C> QueryInner<C> {
+    fn new(info: QueryInfo<C>) -> Self {
         QueryInner {
             info,
             addresses: Default::default(),
@@ -2855,7 +2847,7 @@ pub enum PutRecordContext {
 
 /// Information about a running query.
 #[derive(Debug, Clone)]
-pub enum QueryInfo {
+pub enum QueryInfo<C> {
     /// A query initiated by [`Kademlia::bootstrap`].
     Bootstrap {
         /// The targeted peer ID.
@@ -2866,7 +2858,7 @@ pub enum QueryInfo {
         /// This is `None` if the initial self-lookup has not
         /// yet completed and `Some` with an exhausted iterator
         /// if bootstrapping is complete.
-        remaining: Option<vec::IntoIter<kbucket::Key<PeerId>>>,
+        remaining: Option<vec::IntoIter<kbucket::Key<PeerId, C>>>,
     },
 
     /// A query initiated by [`Kademlia::get_closest_peers`].
@@ -2916,7 +2908,7 @@ pub enum QueryInfo {
     },
 }
 
-impl QueryInfo {
+impl<C> QueryInfo<C> {
     /// Creates an event for a handler to issue an outgoing request in the
     /// context of a query.
     fn to_request(&self, query_id: QueryId) -> KademliaHandlerIn<QueryId> {
@@ -3003,17 +2995,20 @@ pub enum PutRecordPhase {
 }
 
 /// A mutable reference to a running query.
-pub struct QueryMut<'a> {
-    query: &'a mut Query<QueryInner>,
+pub struct QueryMut<'a, C> {
+    query: &'a mut Query<QueryInner<C>, C>,
 }
 
-impl<'a> QueryMut<'a> {
+impl<'a, C> QueryMut<'a, C>
+where
+    C: PreimageIntoKeyBytes<PeerId>,
+{
     pub fn id(&self) -> QueryId {
         self.query.id()
     }
 
     /// Gets information about the type and state of the query.
-    pub fn info(&self) -> &QueryInfo {
+    pub fn info(&self) -> &QueryInfo<C> {
         &self.query.inner.info
     }
 
@@ -3033,17 +3028,20 @@ impl<'a> QueryMut<'a> {
 }
 
 /// An immutable reference to a running query.
-pub struct QueryRef<'a> {
-    query: &'a Query<QueryInner>,
+pub struct QueryRef<'a, C> {
+    query: &'a Query<QueryInner<C>, C>,
 }
 
-impl<'a> QueryRef<'a> {
+impl<'a, C> QueryRef<'a, C>
+where
+    C: PreimageIntoKeyBytes<PeerId>,
+{
     pub fn id(&self) -> QueryId {
         self.query.id()
     }
 
     /// Gets information about the type and state of the query.
-    pub fn info(&self) -> &QueryInfo {
+    pub fn info(&self) -> &QueryInfo<C> {
         &self.query.inner.info
     }
 
