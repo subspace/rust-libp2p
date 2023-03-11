@@ -27,6 +27,7 @@ use crate::upgrade::{InboundUpgradeSend, OutboundUpgradeSend};
 use instant::Instant;
 use smallvec::SmallVec;
 use std::{error, fmt::Debug, task::Context, task::Poll, time::Duration};
+use log::warn;
 
 /// A [`ConnectionHandler`] that opens a new substream for each request.
 // TODO: Debug
@@ -59,6 +60,7 @@ where
         listen_protocol: SubstreamProtocol<TInbound, ()>,
         config: OneShotHandlerConfig,
     ) -> Self {
+        warn!("xxx: libp2p::OneShotHandler::new(): {:?}", config);
         OneShotHandler {
             listen_protocol,
             pending_error: None,
@@ -93,6 +95,7 @@ where
 
     /// Opens an outbound substream with `upgrade`.
     pub fn send_request(&mut self, upgrade: TOutbound) {
+        warn!("xxx: libp2p::OneShotHandler::send_request()");
         self.keep_alive = KeepAlive::Yes;
         self.dial_queue.push(upgrade);
     }
@@ -134,6 +137,7 @@ where
     }
 
     fn on_behaviour_event(&mut self, event: Self::InEvent) {
+        warn!("xxx: libp2p::OneShotHandler::on_behaviour_event(): {:?}", event);
         self.send_request(event);
     }
 

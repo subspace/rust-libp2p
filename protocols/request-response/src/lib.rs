@@ -77,6 +77,7 @@ use libp2p_swarm::{
     ConnectionId, NetworkBehaviour, NetworkBehaviourAction, NotifyHandler, PollParameters,
     THandlerInEvent, THandlerOutEvent,
 };
+use log::warn;
 use smallvec::SmallVec;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -417,6 +418,7 @@ where
             request,
         };
 
+        let mut try_send = false;
         if let Some(request) = self.try_send_request(peer, request) {
             self.pending_events.push_back(NetworkBehaviourAction::Dial {
                 opts: DialOpts::peer_id(*peer).build(),
@@ -425,7 +427,11 @@ where
                 .entry(*peer)
                 .or_default()
                 .push(request);
+            try_send = true;
         }
+        warn!("xxx: libp2p::send_request(): peer = {:?}, try_send = {}, request_id = {:?}",
+            peer, try_send, request_id
+        );
 
         request_id
     }
@@ -532,8 +538,14 @@ where
     ) -> Option<RequestProtocol<TCodec>> {
         if let Some(connections) = self.connected.get_mut(peer) {
             if connections.is_empty() {
+                warn!("xxx: libp2p::try_send_request(): peer = {:?}, request = {:?}, connections empty",
+                    peer, request
+                );
                 return Some(request);
             }
+            warn!("xxx: libp2p::try_send_request(): peer = {:?}, request = {:?}, queueing ...",
+                    peer, request
+            );
             let ix = (request.request_id.0 as usize) % connections.len();
             let conn = &mut connections[ix];
             conn.pending_inbound_responses.insert(request.request_id);
@@ -545,6 +557,9 @@ where
                 });
             None
         } else {
+            warn!("xxx: libp2p::try_send_request(): peer = {:?}, request = {:?}, not connected, returning request",
+                    peer, request
+            );
             Some(request)
         }
     }
@@ -576,9 +591,13 @@ where
         connection: ConnectionId,
         request: &RequestId,
     ) -> bool {
-        self.get_connection_mut(peer, connection)
+        let ret = self.get_connection_mut(peer, connection)
             .map(|c| c.pending_inbound_responses.remove(request))
-            .unwrap_or(false)
+            .unwrap_or(false);
+        warn!("xxx: libp2p::remove_pending_inbound_response(): peer = {:?}, request_id = {:?}, ret = {}",
+                    peer, request, ret
+        );
+        ret
     }
 
     /// Returns a mutable reference to the connection in `self.connected`
@@ -780,9 +799,12 @@ where
                 response,
             } => {
                 let removed = self.remove_pending_inbound_response(&peer, connection, &request_id);
-                debug_assert!(
+                assert!(
                     removed,
-                    "Expect request_id to be pending before receiving response.",
+                    "xxx: Expect request_id to be pending before receiving response.",
+                );
+                warn!("xxx: libp2p::on_connection_handler_event(resp): peer = {:?}, request_id = {:?}",
+                    peer, request_id
                 );
 
                 let message = Message::Response {
@@ -800,6 +822,9 @@ where
                 request,
                 sender,
             } => {
+                warn!("xxx: libp2p::on_connection_handler_event(req): peer = {:?}, request_id = {:?}, sender = {:?}",
+                    peer, request_id, sender
+                );
                 let channel = ResponseChannel { sender };
                 let message = Message::Request {
                     request_id,
