@@ -1184,7 +1184,7 @@ where
     /// Finds the closest peers to a `target` in the context of a request by
     /// the `source` peer, such that the `source` peer is never included in the
     /// result.
-    fn find_closest<T: Clone>(
+    pub fn find_closest<T: Clone>(
         &mut self,
         target: &kbucket::Key<T>,
         source: &PeerId,
