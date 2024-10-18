@@ -421,8 +421,13 @@ where
     /// > in another `NetworkBehaviour` that provides peer and
     /// > address discovery, or known addresses of peers must be
     /// > managed via [`Behaviour::add_address`] and
-    /// > [`Behaviour::remove_address`].
-    pub fn send_request(&mut self, peer: &PeerId, request: TCodec::Request) -> OutboundRequestId {
+    /// > [`Behaviour::remove_address`] or provided explicitly.
+    pub fn send_request(
+        &mut self,
+        peer: &PeerId,
+        request: TCodec::Request,
+        addresses: Vec<Multiaddr>,
+    ) -> OutboundRequestId {
         let request_id = self.next_outbound_request_id();
         let request = OutboundMessage {
             request_id,
@@ -432,7 +437,7 @@ where
 
         if let Some(request) = self.try_send_request(peer, request) {
             self.pending_events.push_back(ToSwarm::Dial {
-                opts: DialOpts::peer_id(*peer).build(),
+                opts: DialOpts::peer_id(*peer).addresses(addresses).build(),
             });
             self.pending_outbound_requests
                 .entry(*peer)

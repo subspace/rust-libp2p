@@ -98,6 +98,7 @@ impl Behaviour {
         let req_id = self.inner.send_request(
             &rendezvous_node,
             Register(NewRegistration::new(namespace.clone(), peer_record, ttl)),
+            Vec::new(),
         );
         self.waiting_for_register
             .insert(req_id, (rendezvous_node, namespace));
@@ -111,7 +112,7 @@ impl Behaviour {
             .retain(|(rz_node, ns), _| rz_node.ne(&rendezvous_node) && ns.ne(&namespace));
 
         self.inner
-            .send_request(&rendezvous_node, Unregister(namespace));
+            .send_request(&rendezvous_node, Unregister(namespace), Vec::new());
     }
 
     /// Discover other peers at a given rendezvous peer.
@@ -135,6 +136,7 @@ impl Behaviour {
                 cookie,
                 limit,
             },
+            Vec::new(),
         );
 
         self.waiting_for_discovery

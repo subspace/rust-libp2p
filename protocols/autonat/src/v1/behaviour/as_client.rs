@@ -287,6 +287,7 @@ impl<'a> AsClient<'a> {
                 peer_id: self.local_peer_id,
                 addresses,
             },
+            Vec::new(),
         );
         self.throttled_servers.push((server, Instant::now()));
         tracing::debug!(peer=%server, "Send dial-back request to peer");

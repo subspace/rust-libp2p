@@ -46,9 +46,10 @@ async fn report_outbound_failure_on_read_response() {
 
     // Expects OutboundFailure::Io failure with `FailOnReadResponse` error
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::FailOnReadResponse);
+        let req_id =
+            swarm2
+                .behaviour_mut()
+                .send_request(&peer1_id, Action::FailOnReadResponse, Vec::new());
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -89,9 +90,10 @@ async fn report_outbound_failure_on_write_request() {
 
     // Expects OutboundFailure::Io failure with `FailOnWriteRequest` error.
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::FailOnWriteRequest);
+        let req_id =
+            swarm2
+                .behaviour_mut()
+                .send_request(&peer1_id, Action::FailOnWriteRequest, Vec::new());
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -146,9 +148,11 @@ async fn report_outbound_timeout_on_read_response() {
 
     // Expects OutboundFailure::Timeout
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::TimeoutOnReadResponse);
+        let req_id = swarm2.behaviour_mut().send_request(
+            &peer1_id,
+            Action::TimeoutOnReadResponse,
+            Vec::new(),
+        );
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -179,9 +183,10 @@ async fn report_outbound_failure_on_max_streams() {
     swarm2.connect(&mut swarm1).await;
 
     let swarm1_task = async move {
-        let _req_id = swarm1
-            .behaviour_mut()
-            .send_request(&peer2_id, Action::FailOnMaxStreams);
+        let _req_id =
+            swarm1
+                .behaviour_mut()
+                .send_request(&peer2_id, Action::FailOnMaxStreams, Vec::new());
 
         // Keep the connection alive, otherwise swarm2 may receive `ConnectionClosed` instead.
         wait_no_events(&mut swarm1).await;
@@ -198,9 +203,10 @@ async fn report_outbound_failure_on_max_streams() {
         // streams is reached and no new tasks can be scheduled.
         //
         // We produce the failure by creating new request before we response.
-        let outbound_req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::FailOnMaxStreams);
+        let outbound_req_id =
+            swarm2
+                .behaviour_mut()
+                .send_request(&peer1_id, Action::FailOnMaxStreams, Vec::new());
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -231,9 +237,10 @@ async fn report_inbound_failure_on_read_request() {
 
     // Expects io::ErrorKind::UnexpectedEof
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::FailOnReadRequest);
+        let req_id =
+            swarm2
+                .behaviour_mut()
+                .send_request(&peer1_id, Action::FailOnReadRequest, Vec::new());
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -290,9 +297,10 @@ async fn report_inbound_failure_on_write_response() {
 
     // Expects OutboundFailure::ConnectionClosed or io::ErrorKind::UnexpectedEof
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::FailOnWriteResponse);
+        let req_id =
+            swarm2
+                .behaviour_mut()
+                .send_request(&peer1_id, Action::FailOnWriteResponse, Vec::new());
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);
@@ -347,9 +355,11 @@ async fn report_inbound_timeout_on_write_response() {
 
     // Expects OutboundFailure::ConnectionClosed or io::ErrorKind::UnexpectedEof
     let client_task = async move {
-        let req_id = swarm2
-            .behaviour_mut()
-            .send_request(&peer1_id, Action::TimeoutOnWriteResponse);
+        let req_id = swarm2.behaviour_mut().send_request(
+            &peer1_id,
+            Action::TimeoutOnWriteResponse,
+            Vec::new(),
+        );
 
         let (peer, req_id_done, error) = wait_outbound_failure(&mut swarm2).await.unwrap();
         assert_eq!(peer, peer1_id);

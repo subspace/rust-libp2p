@@ -382,11 +382,11 @@ impl EventLoop {
                 peer,
                 sender,
             } => {
-                let request_id = self
-                    .swarm
-                    .behaviour_mut()
-                    .request_response
-                    .send_request(&peer, FileRequest(file_name));
+                let request_id = self.swarm.behaviour_mut().request_response.send_request(
+                    &peer,
+                    FileRequest(file_name),
+                    Vec::new(),
+                );
                 self.pending_request_file.insert(request_id, sender);
             }
             Command::RespondFile { file, channel } => {

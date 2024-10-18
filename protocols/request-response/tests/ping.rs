@@ -52,7 +52,7 @@ async fn is_response_outbound() {
 
     let request_id1 = swarm1
         .behaviour_mut()
-        .send_request(&offline_peer, ping.clone());
+        .send_request(&offline_peer, ping.clone(), Vec::new());
 
     match swarm1
         .next_swarm_event()
@@ -71,7 +71,9 @@ async fn is_response_outbound() {
         e => panic!("Peer: Unexpected event: {e:?}"),
     }
 
-    let request_id2 = swarm1.behaviour_mut().send_request(&offline_peer, ping);
+    let request_id2 = swarm1
+        .behaviour_mut()
+        .send_request(&offline_peer, ping, Vec::new());
 
     assert!(!swarm1
         .behaviour()
@@ -139,7 +141,9 @@ async fn ping_protocol() {
     let peer2 = async {
         let mut count = 0;
 
-        let mut req_id = swarm2.behaviour_mut().send_request(&peer1_id, ping.clone());
+        let mut req_id = swarm2
+            .behaviour_mut()
+            .send_request(&peer1_id, ping.clone(), Vec::new());
         assert!(swarm2.behaviour().is_pending_outbound(&peer1_id, &req_id));
 
         loop {
@@ -164,7 +168,11 @@ async fn ping_protocol() {
                     if count >= num_pings {
                         return;
                     } else {
-                        req_id = swarm2.behaviour_mut().send_request(&peer1_id, ping.clone());
+                        req_id = swarm2.behaviour_mut().send_request(
+                            &peer1_id,
+                            ping.clone(),
+                            Vec::new(),
+                        );
                     }
                 }
                 e => panic!("Peer2: Unexpected event: {e:?}"),
@@ -196,7 +204,9 @@ async fn emits_inbound_connection_closed_failure() {
     swarm1.listen().with_memory_addr_external().await;
     swarm2.connect(&mut swarm1).await;
 
-    swarm2.behaviour_mut().send_request(&peer1_id, ping.clone());
+    swarm2
+        .behaviour_mut()
+        .send_request(&peer1_id, ping.clone(), Vec::new());
 
     // Wait for swarm 1 to receive request by swarm 2.
     let _channel = loop {
@@ -261,7 +271,9 @@ async fn emits_inbound_connection_closed_if_channel_is_dropped() {
     swarm1.listen().with_memory_addr_external().await;
     swarm2.connect(&mut swarm1).await;
 
-    swarm2.behaviour_mut().send_request(&peer1_id, ping.clone());
+    swarm2
+        .behaviour_mut()
+        .send_request(&peer1_id, ping.clone(), Vec::new());
 
     // Wait for swarm 1 to receive request by swarm 2.
     let event = loop {
