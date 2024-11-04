@@ -437,7 +437,10 @@ where
 
         if let Some(request) = self.try_send_request(peer, request) {
             self.pending_events.push_back(ToSwarm::Dial {
-                opts: DialOpts::peer_id(*peer).addresses(addresses).build(),
+                opts: DialOpts::peer_id(*peer)
+                    .addresses(addresses)
+                    .extend_addresses_through_behaviour()
+                    .build(),
             });
             self.pending_outbound_requests
                 .entry(*peer)
